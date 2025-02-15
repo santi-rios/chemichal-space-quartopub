@@ -1,11 +1,10 @@
 ---
-title: "chemical-space-quartopub"
+title: "China's rise in the chemical space"
 filters:
   - shinylive
 ---
-# Load and preprocess data
-df <- countries_with_chemicals_joined %>% 
-  mutate(Country = as.factor(Country))
+
+Interactive visualization of the paper ["China's rise in the chemical space and the decline of US influence."](https://chemrxiv.org/engage/chemrxiv/article-details/67920ada6dde43c908f688f6). Explore the shifting landscape of chemical research from 1996 to 2022, highlighting China's growing dominance and the corresponding decline of US influence. The data includes contributions from the tops eight countries, as seen in the original paper. At the end of the page, you can find the visualization for the remaining countries.
 
 ```{shinylive-r}
 #| standalone: true
@@ -35,15 +34,15 @@ ui <- fluidPage(
   theme = bs_theme(bootswatch = "flatly", primary = "#2c3e50", secondary = "#18bc9c"),
   
   # Navbar
-  div(
-    class = "navbar navbar-static-top primary bg-primary",
-    div("Chemical Trends - Combined Plot (Line + Scatter)", 
-        class = "container-fluid")
-  ),
+#   div(
+#     class = "navbar navbar-static-top primary bg-primary",
+#     div("Chemical Trends - Combined Plot (Line + Scatter)", 
+#         class = "container-fluid")
+#   ),
   
   # Control Panel
   card(
-    card_header("Controls", class = "bg-primary text-light"),
+    card_header("Select Year and Countries to Visualize", class = "bg-primary text-light"),
     card_body(
       # Year Slider without animation
       sliderInput(
@@ -55,48 +54,38 @@ ui <- fluidPage(
         step    = 1,
         animate = FALSE,
         width   = "100%"
-      )
-      
-      # Country selection (empty by default, multi-select)
-      # selectInput(
-      #   inputId  = "countrySelector",
-      #   label    = "Select Countries:",
-      #   choices  = sort(unique(df$Country)), 
-      #   selected = NULL,
-      #   multiple = TRUE,
-      #   width    = "100%"
-      # )
+      ),
+      br(),
+      br(),
+    #   Country selection (empty by default, multi-select)
+      selectInput(
+        inputId  = "countrySelector",
+        label    = "Select Countries:",
+        choices  = sort(unique(df$Country)), 
+        selected = NULL,
+        multiple = TRUE,
+        width    = "100%"
+      ),
+      br(),
+      br(),
+      br(),
+      br(),
+      br(),
+      br(),
+      br(),
+      br()
     )
   ),
   
   # Visualization Panel
   card(
     full_screen = TRUE,
-    card_header("Interactive Visualizations", class = "bg-primary text-light"),
-    selectInput(
-      inputId  = "countrySelector",
-      label    = "Select Countries:",
-      choices  = sort(unique(df$Country)), 
-      selected = NULL,
-      multiple = TRUE,
-      width    = "100%"
-    ),
-    br(),
-    br(),
+    card_header("Interactive Visualizations. Click on the legend to toggle countries. Double-click to isolate a country.", class = "bg-primary text-light"),
+
     card_body(
       plotlyOutput("combinedPlot", height = "50vh"),
       br(),
-      plotlyOutput("worldMap", height = "40vh")
-    )
-  ),
-  
-  # Footer
-  div(
-    class = "footer navbar navbar-static-bottom bg-light",
-    style = "margin-bottom: 20px;",
-    div(
-      class = "container-fluid",
-      "Data source: Some Reference"
+      plotlyOutput("worldMap", height = "40vh", width = "90%")
     )
   )
 )
@@ -170,54 +159,62 @@ server <- function(input, output, session) {
         # Line plot for Value.x
         geom_line(
           data = line_data,
-          aes(x = Year, y = Value.x, color = Country, group = Country),
-          linewidth = 1
+          aes(x = Year, y = Value.x, color = Country, group = Country)
         ) +
         # Points for Value.y
-        geom_point(
+        geom_jitter(
           data = data_subset,
           aes(x = Year, y = Value.y, shape = substance, color = Country),
-          size = 1, alpha = 0.5
+          alpha = 0.5,
+          size = 0.8,
+          show.legend = FALSE
         ) +
         scale_color_manual(
-          name = "Legend",
+        #   name = "Countries Selected",
           values = c(
             # Country colors (using Set1 palette)
             "China" = "#e41a1c",  # Red for China
-            "US" = "#1a27e4",
+            "US" = "#0184d1",
+            "Germany" = "#282828",
+            "Japan" = "#6b6b6b",
+            "France" = "#a2477f",
+            "UK" = "#000038",
+            "India" = "#ff9b36",
+            "Russia" = "#ff85b4"
             # Add more countries if needed
             
-            # Substance colors
-            "Organometallics" = "#4daf4a",  # Green
-            "Rare-earths" = "#984ea3"       # Purple
+            # # Substance colors
+            # "Organometallics" = "#4daf4a",  # Green
+            # "Rare-earths" = "#984ea3"       # Purple
           )
         ) +
-        scale_shape_manual(
-          name = "Substances",
-          values = c("Organometallics" = 16, "Rare-earths" = 17)
-        ) +
+        # scale_shape_manual(
+        #   name = "Substances",
+        #   values = c("Organometallics" = 16, "Rare-earths" = 17)
+        # ) +
         labs(
-          title = "Contribution Index & Substance Values",
+          title = "Contribution Index",
           x = "Year", 
-          y = "Value"
+          y = "% Contribution Index",
         ) +
         theme_minimal() +
         theme(
-          legend.position = "bottom",
+          legend.position = "right",
           plot.background = element_rect(fill = "white"),
           panel.grid = element_line(color = "#f0f0f0")
         )
       
       # Convert to plotly with customized hover
       ggplotly(gg, tooltip = c("x", "y", "colour", "shape")) %>%
+    #   ggplotly(gg, tooltip = c("x")) %>%
         style(
           hoverlabel = list(bgcolor = "white", font = list(color = "black")),
           hoveron = "points+fills"
         ) %>%
         layout(
           legend = list(
-            orientation = "h",
-            y = -0.3,
+            orientation = "v",
+            # y = -0.3,
             itemsizing = "constant"
           )
         )
