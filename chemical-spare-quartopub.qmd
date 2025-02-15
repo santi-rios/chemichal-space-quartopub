@@ -1,5 +1,11 @@
 ---
 title: "China's rise in the chemical space"
+format:
+  html:
+    grid: 
+      body-width: 1400px
+    resources: 
+      - shinylive-sw.js
 filters:
   - shinylive
 ---
