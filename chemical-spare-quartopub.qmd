@@ -10,18 +10,14 @@ filters:
   - shinylive
 ---
 
-Interactive visualization of the paper ["China's rise in the chemical space and the decline of US influence."](https://chemrxiv.org/engage/chemrxiv/article-details/67920ada6dde43c908f688f6). Explore the shifting landscape of chemical research from 1996 to 2022, highlighting China's growing dominance and the corresponding decline of US influence. The data includes contributions from the tops eight countries, as seen in the original paper. At the end of the page, you can find the visualization for the remaining countries.
+Interactive visualization of the paper ["China's rise in the chemical space and the decline of US influence."](https://chemrxiv.org/engage/chemrxiv/article-details/67920ada6dde43c908f688f6). Explore the shifting landscape of chemical research from 1996 to 2022, highlighting China's growing dominance and the corresponding decline of US influence. The data includes contributions from the tops eight countries, as seen in the original paper. At the end of the page, you can find the visualization for the remaining countries. 
 
 ```{shinylive-r}
 #| standalone: true
 #| viewerHeight: 1000
-
 library(shiny)
-library(bslib)
-library(dplyr)
 library(plotly)
-library(data.table)
-library(ggplot2)
+
 
 #####################
 ## Data Preparation #
@@ -29,70 +25,53 @@ library(ggplot2)
 
 data_url <- "https://raw.githubusercontent.com/santi-rios/China-Chemical-Dominance/refs/heads/main/data/countries_with_chemicals_joined.csv"
 
-df <- fread(data_url) %>%
-  mutate(Country = as.factor(Country))
+# Read data with base R instead of data.table
+df <- read.csv(data_url)
+df$Country <- as.factor(df$Country)
 
 #############################
 ## Shiny UI Construction   ##
 #############################
 
 ui <- fluidPage(
-  theme = bs_theme(bootswatch = "flatly", primary = "#2c3e50", secondary = "#18bc9c"),
-  
-  # Navbar
-#   div(
-#     class = "navbar navbar-static-top primary bg-primary",
-#     div("Chemical Trends - Combined Plot (Line + Scatter)", 
-#         class = "container-fluid")
-#   ),
+  # Removed bslib dependency
+  tags$style(HTML("
+    .card { margin-bottom: 20px; border: 1px solid #ddd; border-radius: 8px; }
+    .card-header { padding: 10px; background-color: #2c3e50; color: white; }
+    .card-body { padding: 15px; }
+  ")),
   
   # Control Panel
-  card(
-    card_header("Select Year and Countries to Visualize", class = "bg-primary text-light"),
-    card_body(
-      # Year Slider without animation
-      sliderInput(
-        inputId = "year", 
-        label   = "Year",
-        min     = min(df$Year, na.rm = TRUE),
-        max     = max(df$Year, na.rm = TRUE),
-        value   = min(df$Year, na.rm = TRUE),
-        step    = 1,
-        animate = FALSE,
-        width   = "100%"
-      ),
-      br(),
-      br(),
-    #   Country selection (empty by default, multi-select)
-      selectInput(
-        inputId  = "countrySelector",
-        label    = "Select Countries:",
-        choices  = sort(unique(df$Country)), 
-        selected = NULL,
-        multiple = TRUE,
-        width    = "100%"
-      ),
-      br(),
-      br(),
-      br(),
-      br(),
-      br(),
-      br(),
-      br(),
-      br()
-    )
+  div(class = "card",
+      div(class = "card-header", "Select Year and Countries to Visualize"),
+      div(class = "card-body",
+          sliderInput(
+            inputId = "year", 
+            label = "Year",
+            min = min(df$Year, na.rm = TRUE),
+            max = max(df$Year, na.rm = TRUE),
+            value = min(df$Year, na.rm = TRUE),
+            step = 1,
+            width = "100%"
+          ),
+          selectInput(
+            inputId = "countrySelector",
+            label = "Select Countries:",
+            choices = sort(unique(df$Country)), 
+            selected = c("China", "US"),
+            multiple = TRUE,
+            width = "100%"
+          )
+      )
   ),
   
   # Visualization Panel
-  card(
-    full_screen = TRUE,
-    card_header("Interactive Visualizations. Click on the legend to toggle countries. Double-click to isolate a country.", class = "bg-primary text-light"),
-
-    card_body(
-      plotlyOutput("combinedPlot", height = "50vh"),
-      br(),
-      plotlyOutput("worldMap", height = "40vh", width = "90%")
-    )
+  div(class = "card",
+      div(class = "card-header", "Interactive Visualizations"),
+      div(class = "card-body",
+          plotlyOutput("combinedPlot", height = "500px"),
+          plotlyOutput("worldMap", height = "400px")
+      )
   )
 )
 
@@ -101,83 +80,26 @@ ui <- fluidPage(
 #############################
 
 server <- function(input, output, session) {
-  
-  ########################
-  ## Reactive Selection ##
-  ########################
-  
-  selected_countries <- reactiveVal(character(0))
-  
-  # Update our reactive when the user picks new countries
-  observeEvent(input$countrySelector, {
-    selected_countries(input$countrySelector)
-  }, ignoreNULL = FALSE)
-  
-  # If the user toggles a country via the plotly legend, reflect that in 'countrySelector'
-  observeEvent(event_data("plotly_legendclick", source = "combined"), {
-    click <- event_data("plotly_legendclick", source = "combined")
-    current <- selected_countries()
-    if (!is.null(click$name)) {
-      if (click$name %in% current) {
-        updated <- setdiff(current, click$name)
-      } else {
-        updated <- c(current, click$name)
-      }
-      # Limit the number of selected countries if needed
-      if (length(updated) > 50) {
-        showNotification(
-          "Too many countries selected. Please deselect some to improve performance.", 
-          type = "warning"
-        )
-        updated <- head(updated, 50)
-      }
-      selected_countries(updated)
-      # Sync with the UI
-      updateSelectInput(session, "countrySelector", selected = updated)
-    }
+  selected_countries <- reactive({
+    if(is.null(input$countrySelector)) character(0) else input$countrySelector
   })
   
-  # Debounce year changes to avoid frequent re-rendering
-  selected_year <- debounce(reactive(input$year), 300)
-  
-  # Filter data based on user inputs
   filtered_data <- reactive({
-    req(selected_countries())
-    df %>%
-      filter(Country %in% selected_countries(),
-             Year <= selected_year())
+    subset(df, Country %in% selected_countries() & Year <= input$year)
   })
   
-  ####################################
-  ## 1) Combined Line + Scatter Plot ##
-  ####################################
+  output$combinedPlot <- renderPlotly({
+    data <- filtered_data()
+    if(nrow(data) == 0) return(plotly_empty())
     
-    output$combinedPlot <- renderPlotly({
-      data_subset <- filtered_data()
-      if (nrow(data_subset) == 0) return(plotly_empty())
-      
-      # Create distinct dataset for lines (Value.x)
-      line_data <- data_subset %>%
-        distinct(Country, Year, Value.x)
-      
-      # Build ggplot
-      gg <- ggplot() +
-        # Line plot for Value.x
-        geom_line(
-          data = line_data,
-          aes(x = Year, y = Value.x, color = Country, group = Country)
-        ) +
-        # Points for Value.y
-        geom_jitter(
-          data = data_subset,
-          aes(x = Year, y = Value.y, shape = substance, color = Country),
-          alpha = 0.5,
-          size = 0.8,
-          show.legend = FALSE
-        ) +
-        scale_color_manual(
-        #   name = "Countries Selected",
-          values = c(
+    plot_ly(data) %>%
+      add_trace(
+        type = "scatter",
+        mode = "lines+markers",
+        x = ~Year,
+        y = ~Value.x,
+        color = ~Country,
+        colors = c(
             # Country colors (using Set1 palette)
             "China" = "#e41a1c",  # Red for China
             "US" = "#0184d1",
@@ -192,83 +114,34 @@ server <- function(input, output, session) {
             # # Substance colors
             # "Organometallics" = "#4daf4a",  # Green
             # "Rare-earths" = "#984ea3"       # Purple
-          )
-        ) +
-        # scale_shape_manual(
-        #   name = "Substances",
-        #   values = c("Organometallics" = 16, "Rare-earths" = 17)
-        # ) +
-        labs(
-          title = "Contribution Index",
-          x = "Year", 
-          y = "% Contribution Index",
-        ) +
-        theme_minimal() +
-        theme(
-          legend.position = "right",
-          plot.background = element_rect(fill = "white"),
-          panel.grid = element_line(color = "#f0f0f0")
-        )
-      
-      # Convert to plotly with customized hover
-      ggplotly(gg, tooltip = c("x", "y", "colour", "shape")) %>%
-    #   ggplotly(gg, tooltip = c("x")) %>%
-        style(
-          hoverlabel = list(bgcolor = "white", font = list(color = "black")),
-          hoveron = "points+fills"
-        ) %>%
-        layout(
-          legend = list(
-            orientation = "v",
-            # y = -0.3,
-            itemsizing = "constant"
-          )
-        )
+          ),
+        hoverinfo = "x+y+name"
+      ) %>%
+      layout(
+        title = "Contribution Index",
+        yaxis = list(title = "% Contribution Index"),
+        showlegend = TRUE
+      )
   })
   
-  ########################
-  ## 2) World Map Plot  ##
-  ########################
-  
-  # Example: color by Value.x (or switch to Value.y if desired)
   output$worldMap <- renderPlotly({
-    data_subset <- filtered_data() %>%
-      filter(Year == selected_year())
-    if (nrow(data_subset) == 0) {
-      return(plotly_empty(type="scatter", mode="markers"))
-    }
+    data <- subset(df, Year == input$year)
     
-    plot_geo(data_subset, height = 300) %>%
+    plot_geo(data, height = 300) %>%
       add_trace(
         z = ~Value.x,
         color = ~Value.x,
         colors = "Blues",
         locations = ~iso3c,
-        text = ~paste0("<b>Country:</b> ", Country,
-                       "<br><b>Year:</b> ", Year,
-                       "<br><b>Value.x:</b> ", round(Value.x, 2)),
         hoverinfo = "text",
-        marker = list(line = list(color = "white", width = 0.5))
-      ) %>%
-      colorbar(
-        title = "Value.x",
-        orientation = 'h',
-        y = -0.1
+        text = ~paste(Country, "<br>Value:", round(Value.x, 2))
       ) %>%
       layout(
-        title = paste("Global Distribution -", selected_year()),
-        geo = list(
-          showframe = FALSE,
-          showcoastlines = TRUE,
-          projection = list(type = "natural earth"),
-          bgcolor = "rgba(0,0,0,0)",
-          landcolor = "#f8f9fa"
-        ),
-        margin = list(b = 80)
+        title = paste("Global Distribution -", input$year),
+        geo = list(showframe = FALSE, projection = list(type = "natural earth"))
       )
   })
 }
 
-# Run the application
 shinyApp(ui, server)
 ```

@@ -1,266 +1,297 @@
 library(shiny)
-library(bslib)
 library(plotly)
 library(data.table)
-library(tidyr)
-library(dplyr)
-library(DT)
+library(ggplot2)
 library(RColorBrewer)
+library(dplyr)
 
-###########################
-## Data and Preparation  ##
-###########################
-data_url <- "https://raw.githubusercontent.com/santi-rios/China-Chemical-Dominance/refs/heads/main/data/countries_with_chemicals_joined.csv"
-df <- read.csv(data_url, stringsAsFactors = FALSE)
-df$Country <- as.factor(df$Country)
+######### Data Preparation #########
+data_url <- "https://raw.githubusercontent.com/santi-rios/China-Chemical-Dominance/main/data/fig_1_df.csv"
 
-# Helper for original map tooltip
-df_hover <- df %>%
-  group_by(Country) %>%
-  summarize(hover_text = paste(Country, "<br>Value:", round(Value.x, 2)))
+# Read data with data.table
+df <- fread(data_url)
+df[, Country := as.factor(Country)]
+df[, substance := as.factor(substance)]
 
-##################################################
-## 1) Define color logic for the line chart     ##
-##    so that China=red, US=blue, others=distinct
-##################################################
-line_color_map <- function(country_vec) {
-  # We'll identify the unique countries in the subset
-  countries_unique <- unique(country_vec)
-
-  # Initialize a named character vector for the colors
-  color_out <- setNames(rep(NA_character_, length(countries_unique)), countries_unique)
-
-  # Assign fixed colors to China and US if present
-  if ("China" %in% countries_unique) {
-    color_out["China"] <- "#FF0000" # Red
-  }
-  if ("United States" %in% countries_unique) {
-    color_out["United States"] <- "#0000FF" # Blue
-  }
-
-  # The rest get distinct colors from a palette
-  others <- setdiff(countries_unique, c("China", "United States"))
-  if (length(others) > 0) {
-    # e.g., "Dark2"
-    pal <- brewer.pal(max(8, length(others)), name = "Dark2")[seq_along(others)]
-    color_out[others] <- pal
-  }
-
-  # Now match back to the full vector order
-  final_colors <- color_out[match(country_vec, names(color_out))]
-  unname(final_colors)
-}
-
-###############################
-## 2) Shiny App UI           ##
-###############################
-app_theme <- bs_theme(
-  version = 5,
-  bootswatch = "flatly",
-  base_font = font_google("Open Sans"),
-  heading_font = font_google("Raleway"),
-  primary = "#2c3e50"
+######### Custom Labels #########
+figure_labels <- list(
+  "Figure-12-a_b" = list(y_title = "Composite Index", map_title = "Combined Metrics"),
+  "Figure2-b"     = list(y_title = "Organometallics", map_title = "Organometallics Metrics"),
+  "Figure2-d"     = list(y_title = "Rare-earths", map_title = "Rare Earth Elements"),
+  "Figure1-d"     = list(y_title = "GDP Growth", map_title = "GDP Growth"),
+  "Figure1-a"     = list(y_title = "Contribution", map_title = "Contribution Map")
 )
 
+################
+## Shiny UI   ##
+################
 ui <- fluidPage(
-  theme = app_theme,
+  tags$head(
+    tags$style(HTML("
+      .navbar { background-color: #222831; padding: 10px; }
+      .card { margin: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+      .card-header {
+        background-color: #00ADB5 !important;
+        color: white;
+        padding: 15px;
+      }
+      .selectize-input { border-radius: 4px; padding: 8px; }
+      .plotly.html-widget { border-radius: 8px; }
+    "))
+  ),
+  div(
+    class = "navbar",
+    h4("China's rise in the chemical space and the decline of US influence.", style = "color: white; margin: 0;")
+  ),
+  div(
+    class = "card",
+    div(
+      class = "card-header",
+      "Select a Year and up to 10 Countries. A random country is selected by default.
+           Single-click to add/remove a country. Double-click a legend item to isolate it."
+    ),
+    div(
+      class = "card-body",
 
-  # JavaScript snippet to auto-click the slider "Play" button on load
-  tags$script(HTML("
-    $(document).on('shiny:connected', function() {
-      setTimeout(function() {
-        $('.slider-animate-button').click();
-      }, 1000);
-    });
-  ")),
+      # Year Slider
+      sliderInput(
+                      "year", "Select Year",
+                      min = min(df$Year, na.rm = TRUE) + 1,
+                      max = max(df$Year, na.rm = TRUE) - 1,
+                      value = max(df$Year, na.rm = TRUE) - 1,
+                      step = 1,
+                      width = "100%",
+                      animate = TRUE),
 
-  # Page Header
-  fluidRow(
-    style = "background-color: #2c3e50; padding: 20px; margin-bottom: 20px;",
-    column(
-      width = 12,
-      h2("Global Chemical Collaborations", style = "color: #ffffff; margin: 0;"),
-      p("Explore the contribution index by year and see a color-coded world map of selected countries.",
-        style = "color: #cccccc; margin: 0;"
+      # Metric (figure) selection
+      selectInput(
+        "facet", "Select Metric:",
+        choices = unique(df$source.x),
+        selected = "Figure-12-a_b",
+        width = "100%"
+      ),
+
+      # Countries
+      selectizeInput(
+        "countrySelector",
+        "Select Countries:",
+        choices  = NULL, # filled dynamically in server
+        multiple = TRUE,
+        options  = list(maxItems = 10),
+        width    = "100%"
       )
     )
   ),
-
-  # Main Tabset
-  tabsetPanel(
-    tabPanel(
-      "Visualizations",
-      br(),
-      fluidRow(
-        column(
-          width = 4,
-          # Controls
-          div(
-            class = "card",
-            div(class = "card-header", style = "background-color: #2c3e50; color: white;", "Select Year and Countries"),
-            div(
-              class = "card-body",
-              sliderInput(
-                inputId = "year",
-                label   = "Year",
-                min     = min(df$Year, na.rm = TRUE),
-                max     = max(df$Year, na.rm = TRUE),
-                value   = 2022,
-                step    = 1,
-                animate = animationOptions(interval = 1000, loop = FALSE, playButton = "Play", pauseButton = "Pause"),
-                width   = "100%"
-              ),
-              selectInput(
-                inputId  = "countrySelector",
-                label    = "Select Countries:",
-                choices  = sort(unique(df$Country)),
-                selected = sort(unique(df$Country)),
-                multiple = TRUE,
-                width    = "100%"
-              )
-            )
-          )
-        ),
-        column(
-          width = 8,
-          # Plots
-          div(
-            class = "card",
-            div(class = "card-header", style = "background-color: #2c3e50; color: white;", "Interactive Plots"),
-            div(
-              class = "card-body",
-              plotlyOutput("combinedPlot", height = "350px"),
-              hr(),
-              plotlyOutput("worldMap", height = "350px")
-            )
-          )
-        )
-      )
+  div(
+    class = "card",
+    div(
+      class = "card-header",
+      "Analytical Interactive Plots. Hover for more info.
+           The map shows data at the selected year.
+           Cartogram (if available) only for Figure-12-a_b."
     ),
-    tabPanel(
-      "Data Explorer",
-      br(),
-      div(
-        class = "card",
-        div(class = "card-header", style = "background-color: #2c3e50; color: white;", "Data Overview"),
-        div(
-          class = "card-body",
-          DT::dataTableOutput("rawData")
-        )
-      )
+    div(
+      class = "card-body",
+      plotlyOutput("combinedPlot", height = "500px"),
+      plotlyOutput("geoPlot", height = "400px"),
+      uiOutput("cartogramImage") # show image if "Figure-12-a_b"
     )
   )
 )
 
-###############################
-## 3) Shiny Server           ##
-###############################
+################
+## Shiny Server
+################
 server <- function(input, output, session) {
-  # Reactive selection
-  selected_countries <- reactive({
-    if (is.null(input$countrySelector)) character(0) else input$countrySelector
+  ###########################
+  ## 1) Update country list ##
+  ###########################
+  observe({
+    current_metric <- input$facet
+    # Gather valid countries for that figure, sorted
+    valid_countries <- df[source.x == current_metric, unique(Country)]
+    valid_countries <- sort(as.character(valid_countries)) # alphabetical
+
+    # By default, select a random country if available
+    default_sel <- if (length(valid_countries) > 0) sample(valid_countries, 1) else character(0)
+
+    # Update the input
+    updateSelectizeInput(
+      session, "countrySelector",
+      choices = valid_countries,
+      selected = default_sel,
+      server = TRUE
+    )
   })
 
+  #############################################
+  ## 2) Reactive subset based on user inputs ##
+  #############################################
   filtered_data <- reactive({
-    subset(df, Country %in% selected_countries() & Year <= input$year)
-  })
+    req(input$facet, input$countrySelector, input$year)
+    df[
+      source.x == input$facet &
+        Country %in% input$countrySelector &
+        Year <= input$year
+    ]
+  }) %>% debounce(300)
 
-  ################################
-  ## A) The Combined Line Plot  ##
-  ################################
-  output$combinedPlot <- renderPlotly({
-    data <- filtered_data()
-    if (nrow(data) == 0) {
-      return(plotly_empty(type = "scatter", mode = "lines"))
+  ########################################
+  ## 3) Helper: define color assignment ##
+  ########################################
+  country_colors <- function(data_subset) {
+    countries <- unique(as.character(data_subset$Country))
+    color_map <- c()
+    if ("United States" %in% countries) {
+      color_map["United States"] <- "blue"
     }
+    if ("China" %in% countries) {
+      color_map["China"] <- "red"
+    }
+    others <- setdiff(countries, c("United States", "China"))
+    if (length(others) > 0) {
+      pal <- colorRampPalette(brewer.pal(min(8, length(others)), name = "Set2"))(length(others))
+      color_map[others] <- pal
+    }
+    color_map
+  }
 
-    # For labeling the last year
-    data <- data %>%
-      group_by(Country) %>%
-      mutate(
-        text_label = ifelse(Year == max(Year), as.character(Country), NA)
-      ) %>%
-      ungroup()
-
-    # Determine colors for each row
-    data$lineColor <- line_color_map(data$Country)
-
-    fig <- plot_ly(
-      data,
-      x = ~Year,
-      y = ~Value.x,
-      color = I(~lineColor), # pass literal color
-      type = "scatter",
-      mode = "lines+markers+text",
-      line = list(width = 2),
-      marker = list(size = 5),
-      text = ~text_label,
-      textposition = "top center",
-      hoverinfo = "text",
-      hovertext = ~ paste0(
-        "<b>", Country, "</b><br>",
-        "Year: ", Year, "<br>",
-        "Value: ", round(Value.x, 2)
-      )
-    ) %>%
-      layout(
-        title = list(text = "Contribution Index Over Time", x = 0.02),
-        xaxis = list(title = "Year", gridcolor = "#f0f0f0"),
-        yaxis = list(title = "Value.x", gridcolor = "#f0f0f0"),
-        hovermode = "closest",
-        showlegend = FALSE
-      )
-
-    fig
-  })
-
-  ###############################
-  ## B) The World Map (Blue Scale, No Legend)
-  ###############################
-  output$worldMap <- renderPlotly({
-    # Use only the current year
-    map_data <- df[df$Year == input$year, ]
-    if (nrow(map_data) == 0) {
+  ###########################################################
+  ## 4) Combined Plot:
+  ##    - Always line (Value.x) for all countries
+  ##    - If "Figure-12-a_b", add points for Value.y only on rows that have it
+  ###########################################################
+  output$combinedPlot <- renderPlotly({
+    data_subset <- filtered_data()
+    if (nrow(data_subset) == 0) {
       return(plotly_empty())
     }
 
-    # Merge in simpler hover text
-    map_data2 <- merge(map_data, df_hover, by = "Country", all.x = TRUE)
+    color_map <- country_colors(data_subset)
 
-    plot_geo(map_data2, height = 350) %>%
+    # Build the base ggplot with lines for Value.x
+    gg_base <- ggplot(data_subset, aes(x = Year, color = Country)) +
+      geom_line(aes(y = Value.x, linetype = Country), na.rm = TRUE) +
+      scale_color_manual(values = color_map) +
+      labs(
+        title = paste0(
+          figure_labels[[input$facet]]$y_title %||% input$facet,
+          " Trend"
+        ),
+        x = "Year",
+        y = figure_labels[[input$facet]]$y_title %||% "Value"
+      ) +
+      theme_minimal() +
+      theme(
+        legend.position = "right",
+        plot.background = element_rect(fill = "white"),
+        panel.grid = element_line(color = "#f0f0f0")
+      ) +
+      scale_x_continuous(breaks = seq(min(data_subset$Year), max(data_subset$Year), by = 5))
+
+    # If we’re in "Figure-12-a_b", we also add points for Value.y
+    # but only where Value.y is not missing
+    if (input$facet == "Figure-12-a_b") {
+      gg_base <- gg_base +
+        geom_point(
+          data = data_subset[!is.na(Value.y), ],
+          aes(y = Value.y, shape = substance),
+          size = 2, alpha = 0.8, na.rm = TRUE
+        ) +
+        scale_shape_manual(values = c(16, 17, 15, 18), na.translate = FALSE)
+    }
+
+    p <- ggplotly(gg_base, tooltip = c("x", "y", "colour", "shape")) %>%
+      layout(
+        legend    = list(orientation = "v"),
+        hovermode = "closest"
+      )
+
+    # If "Figure1-d", add certain annotations
+    if (input$facet == "Figure1-d") {
+      p <- p %>% layout(
+        annotations = list(
+          list(
+            x = 2020, y = 10, text = "COVID-19", showarrow = FALSE,
+            font = list(size = 8)
+          ),
+          list(
+            x = 2007, y = 11, text = "Global Financial Crisis", showarrow = FALSE,
+            font = list(size = 8)
+          )
+        )
+      )
+    }
+
+    p
+  })
+
+  ##################################
+  ## 5) World Map (using Value.x) ##
+  ##################################
+  output$geoPlot <- renderPlotly({
+    data <- filtered_data()[Year == input$year]
+    if (nrow(data) == 0) {
+      return(plotly_empty())
+    }
+
+    val_label <- figure_labels[[input$facet]]$y_title %||% "Value"
+
+    plot_geo(data, height = 300) %>%
       add_trace(
-        locations = ~iso3c,
         z = ~Value.x,
         color = ~Value.x,
-        colors = "Blues",
+        colorscale = "Purples",
+        locations = ~iso3c,
+        text = ~ paste(Country, "<br>Value.x:", round(Value.x, 2)),
         hoverinfo = "text",
-        text = ~hover_text,
-        marker = list(
-          line = list(color = "white", width = 0.3),
-          showscale = FALSE
-        ) # hide color scale
+        marker = list(line = list(color = "white", width = 0.3))
       ) %>%
+      colorbar(title = val_label) %>%
       layout(
-        title = list(text = paste("Global Distribution -", input$year), x = 0.02),
+        title = paste(
+          figure_labels[[input$facet]]$map_title %||% "Map",
+          "in", input$year
+        ),
         geo = list(
           showframe   = FALSE,
-          projection  = list(type = "natural earth")
-        ),
-        showlegend = FALSE # No legend
+          projection  = list(type = "natural earth"),
+          bgcolor     = "rgba(0,0,0,0)"
+        )
       )
   })
 
-  ########################################
-  ## C) Data Table "Data Explorer" Tab  ##
-  ########################################
-  output$rawData <- DT::renderDataTable({
-    df_table <- df[, c("Year", "Country", "Value.x")]
-    df_wide <- pivot_wider(df_table, names_from = Country, values_from = Value.x)
-    DT::datatable(
-      df_wide,
-      options = list(pageLength = 10, scrollX = TRUE),
-      rownames = FALSE
-    )
+  ###########################################
+  ## 6) Cartogram image if "Figure-12-a_b" ##
+  ###########################################
+  output$cartogramImage <- renderUI({
+    req(input$year)
+    # Use EXACT facet name "Figure-12-a_b"
+    if (input$facet == "Figure-12-a_b") {
+      # If you want them from GitHub:
+      # (Make sure that these .pngs exist in that exact path with same naming)
+      tags$div(
+        style = "text-align: center; margin-top: 10px;",
+        tags$img(
+          src = paste0(
+            "https://raw.githubusercontent.com/santi-rios/China-Chemical-Dominance/main/cartograms/",
+            input$year, ".png"
+          ),
+          style = "max-width: 100%; height: auto;"
+        )
+      )
+
+      # If you prefer local usage (and the cartograms are in www/cartograms/):
+      # tags$div(
+      #   style = "text-align: center; margin-top: 10px;",
+      #   tags$img(
+      #     src = paste0("cartograms/", input$year, ".png"),
+      #     style = "max-width: 100%; height: auto;"
+      #   )
+      # )
+    } else {
+      NULL
+    }
   })
 }
 
